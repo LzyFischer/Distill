@@ -23,7 +23,7 @@ import pdb
 #  External helpers (same as before)
 # -----------------------------------------------------------------------------
 from utils import (
-    get_alphabet_choice, get_number_choice, get_true_false, get_yes_no  # ← existing sync call returning list[str]
+    get_alphabet_choice, get_number_choice, get_true_false, get_yes_no, extract_answer_anli
 )
 from math_utils import is_math_correct, parse_math_boxed, parse_boxed
 
