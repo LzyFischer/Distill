@@ -76,10 +76,14 @@ dataset_prompt: Dict[str, Any] = {
 }
 
 # single powerful wrapper
+# POWER_WRAPPER = (
+#     "Read the problem carefully. Break it into small sub‑problems. Solve each "
+#     "sub‑problem step by step. Double‑check the answers.\n\n{}"
+# )
+
 POWER_WRAPPER = (
-    "Read the problem carefully. Break it into small sub‑problems. Solve each "
-    "sub‑problem step by step. Double‑check the answers.\n\n{}"
-)
+    "{}"
+    )
 
 ###############################################################################
 # Parse predictions & gold                                                    #
@@ -91,17 +95,15 @@ TFN_RE = re.compile(r"(true|false|neither)", re.I)
 def extract_pred(dataset: str, text: str):
     if not text:
         return "N/A"
-    if dataset in {"commonsense_qa", "arc_challenge", "date"}:
+    if dataset in {"commonsense_qa", "arc_challenge", "date",}:
         return get_alphabet_choice(text).upper()
     if dataset == "anli":
-        m = TFN_RE.findall(text)
-        return m[-1].lower() if m else "N/A"
+        # text = remove_backward_answer(text)
+        return extract_answer_anli(text)
     if dataset == "strategy_qa":
         return get_yes_no(text)
-    if dataset in {"math", "gsm8k"}:
+    if dataset in {"math", "gsm8k", "table_mwp"}:
         return parse_math_boxed(text)
-    if dataset == "table_mwp":
-        return parse_boxed(text)
     return "N/A"
 
 
@@ -142,6 +144,8 @@ def process_file(path: Path, dataset: str, model_name: str):
         prompt  = make_prompt(samp, dataset)
         reply   = asyncio.run(batch_call_gemini_api(prompt, model_name))
         pred    = extract_pred(dataset, reply)
+        if isinstance(pred, float):
+            pdb.set_trace()
         correct = evaluate_pred(dataset, pred, samp["gold_answer"])
 
         samp.update({"prompt": prompt, "response": reply, "pred": pred, "correct": correct})

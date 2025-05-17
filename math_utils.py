@@ -14,6 +14,7 @@ import re, signal
 from typing import Any, Optional
 from latex2sympy2 import latex2sympy
 from sympy import simplify, sympify
+import pdb
 
 # ───────────────────────────── REGEXES ────────────────────────────────
 _NUM_TOKEN   = re.compile(r"[-+]?\d*\.?\d+(?:/\d+)?")
@@ -83,7 +84,10 @@ def _last_boxed(expr: str) -> str | None:
 def _normalise(expr: str | None) -> str:
     if not expr:
         return ""
-    expr = _convert_percentage(expr)
+    try:
+        expr = _convert_percentage(expr)
+    except Exception:
+        pass
     expr = expr.lower()
     expr = expr.replace("\\left", "").replace("\\right", "")
     expr = expr.replace("^{\\circ}", "").replace("^\\circ", "")

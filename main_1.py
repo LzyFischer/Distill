@@ -10,9 +10,10 @@ from peft import get_peft_model, LoraConfig, TaskType
 from accelerate import Accelerator
 from accelerate.utils import DistributedDataParallelKwargs, InitProcessGroupKwargs
 from datetime import datetime, timedelta
-from math_utils import is_math_correct
 import bitsandbytes
 import torch.distributed as dist
+from math_utils import is_math_correct, parse_math_boxed, parse_boxed
+from utils import get_number_choice, get_alphabet_choice, get_true_false, get_yes_no, extract_answer_anli
 import wandb
 import pdb
 
@@ -61,7 +62,7 @@ LR_MISC = args.lr_misc        # shared modules
 alpha           = 0.5     # unused (was ensemble weight in baseline)
 temperature     = 1.0
 kl_weight       = 0.1
-USE_KL_DISTILLATION = False
+USE_KL_DISTILLATION = True
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # torch.backends.cuda.matmul.allow_tf32 = True      # (optional) speed
@@ -353,6 +354,7 @@ for epoch in range(1, NUM_EPOCHS + 1):
 
         gate1 = router(h1)                         # [B,2] one‑hot
         gate2 = router(h2)
+        pdb.set_trace()
 
         # 主进程广播，确保多 GPU 一致
         if dist.is_initialized():
@@ -458,164 +460,199 @@ for epoch in range(1, NUM_EPOCHS + 1):
             KL=f"{(kl1+kl2).item():.3f}"
         )
 
-# ──────────────────────── EVALUATION ────────────────────────
-student1.eval(); student2.eval()
-gen_student1 = accelerator.unwrap_model(student1)
-gen_student2 = accelerator.unwrap_model(student2)
 
-TEMPLATES = {
-    "mistral":  "<s>[INST] Answer the following question:\n### Question:\n{question} [/INST] \n\nRead the problem carefully. Break it into small sub‑problems. Solve each sub‑problem step by step. Double-check the answers. In the final line, write only the answer inside \\boxed{{}}",
-    # "mistral": "Question: {question}\n\nPlease reason step by step, and put your final answer within \\boxed{{}}.",
-    "gemma"  :  "<bos><start_of_turn>user\nAnswer the following question:\n### Question: {question}<end_of_turn>\n<start_of_turn>model\n### \n\nRead the problem carefully. Break it into small sub‑problems. Solve each sub‑problem step by step. Double-check the answers. In the final line, write only the answer inside \\boxed{{}}"  # noqa: E501
+####### ──────────────────────── EVALUATION ──────────────────────── #######
+print("✓ Training done")
+
+_GOLD_MAP = {
+    "entailment":    "true",
+    "neutral":       "neither",
+    "contradiction": "false",
 }
 
-# --- extraction helpers --------------------------------------------------
-_re_num = re.compile(
-    r"""
-    [-+]?                     # optional sign or dollar
-    (?:                           # non‑capturing group for the integer part
-        \d{1,3} (?:,\d{3})+       # 1–3 digits followed by one‑or‑more ,xxx groups
-      | \d+                       # …or just digits (no commas)
-    )
-    (?:\.\d+)?                    # optional decimal part
-    """,
-    re.VERBOSE,
-)
-_re_choice   = re.compile(r"\(([A-F])\)")
-_re_tf       = re.compile(r"\b(true|false)\b", re.I)
-_re_yesno    = re.compile(r"\b(yes|no)\b", re.I)
-_re_mathbox  = re.compile(r"\\boxed\{([^}]*)\}")
+def convert_gold(label: str) -> str:
+    try:
+        return _GOLD_MAP[label.strip().lower()]
+    except KeyError as e:
+        raise ValueError(f"Unknown gold label: {label!r}") from e
 
-def parse_number(txt):
-    m = re.findall(r"answer is \((\d)\)", txt)
-    if m:
-        return m[-1]
-    else:
-        m = _re_num.findall(txt)
-        return m[-1].replace(",", "") if m else "N/A"
+def extract_pred(dataset: str, text: str):
+    if not text:
+        return "N/A"
+    if dataset in {"commonsense_qa", "arc_challenge", "date",}:
+        return get_alphabet_choice(text).upper()
+    if dataset == "anli":
+        # text = remove_backward_answer(text)
+        return extract_answer_anli(text)
+    if dataset == "strategy_qa":
+        return get_yes_no(text)
+    if dataset in {"math", "gsm8k", "table_mwp"}:
+        return parse_math_boxed(text)
+    return "N/A"
 
-def parse_choice(txt):
-    m = _re_choice.findall(txt)
-    return m[-1].upper() if m else "N/A"
+def evaluate_pred(dataset: str, pred: str, gold: str) -> bool:
+    if dataset in {"math", "gsm8k", "table_mwp"}:
+        return is_math_correct(pred, gold)
+    return pred == gold
 
-def parse_truefalse(txt):
-    m = _re_tf.findall(txt)
-    return m[-1].lower() if m else "N/A"
+class PromptDataset(Dataset):
+    """
+    Each line in the JSONL file must contain
+      {
+        "prompt": "<already-formatted prompt string>",
+        "gold_answer": "<gold label/answer text>"
+      }
+    """
+    def __init__(self, path):
+        self.data = load_data(path)
 
-def parse_yesno(txt):
-    m = _re_yesno.findall(txt)
-    return m[-1].lower() if m else "N/A"
+    def __len__(self):
+        return len(self.data)
 
-def parse_math_boxed(txt):
-    m = _re_mathbox.findall(txt)
-    return m[-1] if m else parse_number(txt)
-
-EXTRACTORS = {
-    "GSM8K"   : (parse_number, True),
-    "GSM8K-Rev": (parse_number, True),
-    "MATH"    : (parse_math_boxed, True),
-    "TabMWP"  : (parse_math_boxed, True),
-    "SQA"     : (parse_yesno, False),
-    "BoolQ"   : (parse_yesno, False),
-    "ANLI"    : (parse_choice, False),
-    "ARC"     : (parse_choice, False),
-    "CSQA"    : (parse_choice, False),
-    "OBQA"    : (lambda t: parse_choice(remove_backward_answer(t)), False),
-    "Date"    : (parse_choice, False),
-    "ESNLI"   : (parse_choice, False),
-}
-
-# --- answer extraction helpers ------------------------------------------
-
-def _calc_seq_logprobs(scores, seq, start_idx):
-    """Sum log‑probs of generated tokens beginning at `start_idx`."""
-    L, B = len(scores), seq.size(0)
-    logp = torch.zeros(B, dtype=torch.float32, device=scores[0].device)
-    for t in range(L):
-        step_lp = scores[t].log_softmax(-1)          # (B,V)
-        tok     = seq[:, start_idx + t]              # picked token ids
-        logp   += step_lp.gather(1, tok.unsqueeze(1)).squeeze(1)
-    return logp
-
-class QASet(Dataset):
-    """(question, gold_answer) records loaded from `path`."""
-    def __init__(self, path): self.data = load_data(path)
-    def __len__(self): return len(self.data)
     def __getitem__(self, idx):
         d = self.data[idx]
-        return d["question"], d["answer"]
+        return d["prompt"], d["gold_answer"]
 
-def evaluate_dual_students(
-    path: str,
-    task_name: str = "GSM8K",
-    model_tag: str = "mistral",
-    batch_size: int = 8,
-    max_new: int = MAX_LEN,
+
+def _calc_seq_logprobs(scores, seq, start_idx: int) -> torch.Tensor:
+    """
+    Sum log-probs of generated tokens, batched.
+
+    scores   – tuple(list) of length L with tensors (B,V)
+    seq      – generated ids (B, prompt_len+L)
+    start_idx– first newly-generated token position in `seq`
+    returns  – (B,) log-prob for each example
+    """
+    L, B = len(scores), seq.size(0)
+    lp = torch.zeros(B, device=scores[0].device, dtype=torch.float32)
+    for t in range(L):
+        step_lp = scores[t].log_softmax(-1)          # (B,V)
+        tok     = seq[:, start_idx + t]              # (B,)
+        lp     += step_lp.gather(1, tok.unsqueeze(1)).squeeze(1)
+    return lp
+
+
+@torch.no_grad()
+def evaluate_dual_loader(
+    model1, tokenizer1,
+    model2, tokenizer2,
+    dataloader: DataLoader,
+    dataset_name: str,
+    max_gen_tokens: int = 128,
 ):
-    extract, is_math   = EXTRACTORS[task_name]
-    template           = TEMPLATES[model_tag]
-    loader             = DataLoader(QASet(path), batch_size=batch_size, shuffle=False)
+    """
+    • Generates with both students.
+    • Uses log-prob of each model’s own output to pick an **ensemble** answer.
+    • Logs running & final accuracies for:
+          – student-1
+          – student-2
+          – ensemble (best-log-prob pick)
 
-    s1_ok = s2_ok = ensemble_ok = total = 0
-    for qs, gold in tqdm(loader, desc="Eval‑dual", dynamic_ncols=True):
-        # build identical prompts for both students
-        prompts = [template.format(question=q) for q in qs]
+    All task-specific post-processing is funnelled through
+    `extract_pred` and `evaluate_pred`, identical to the single-model flow.
+    """
+    model1.eval(); model2.eval()
 
-        # encode separately for each tokenizer
-        enc1 = tokenizer_1(prompts, return_tensors="pt", padding=True).to(DEVICE)
-        enc2 = tokenizer_2(prompts, return_tensors="pt", padding=True).to(DEVICE)
-        p_len1 = enc1.attention_mask.sum(-1)   # prompt lengths (B,)
+    total           = 0
+    correct_s1      = 0
+    correct_s2      = 0
+    correct_ensemble= 0
+
+    for prompts, golds in tqdm(dataloader, desc="Eval-dual", dynamic_ncols=True):
+
+        # --- 1. Encode & generate ------------------------------------------------
+        enc1 = tokenizer1(list(prompts), return_tensors="pt", padding=True).to(DEVICE)
+        enc2 = tokenizer2(list(prompts), return_tensors="pt", padding=True).to(DEVICE)
+
+        p_len1 = enc1.attention_mask.sum(-1)          # prompt lengths (B,)
         p_len2 = enc2.attention_mask.sum(-1)
 
-        # generate with scores
-        out1 = gen_student1.generate(**enc1, max_new_tokens=max_new, do_sample=False,
-                                     pad_token_id=tokenizer_1.pad_token_id,
-                                     return_dict_in_generate=True, output_scores=True)
-        out2 = gen_student2.generate(**enc2, max_new_tokens=max_new, do_sample=False,
-                                     pad_token_id=tokenizer_2.pad_token_id,
-                                     return_dict_in_generate=True, output_scores=True)
+        out1 = model1.generate(
+            **enc1,
+            max_new_tokens=max_gen_tokens,
+            do_sample=False,
+            pad_token_id=tokenizer1.pad_token_id,
+            return_dict_in_generate=True,
+            output_scores=True,
+        )
+        out2 = model2.generate(
+            **enc2,
+            max_new_tokens=max_gen_tokens,
+            do_sample=False,
+            pad_token_id=tokenizer2.pad_token_id,
+            return_dict_in_generate=True,
+            output_scores=True,
+        )
 
-        # decode + extract answers
-        preds1 = [extract(o) for o in tokenizer_1.batch_decode(out1.sequences,
-                                                              skip_special_tokens=True)]
-        preds2 = [extract(o) for o in tokenizer_2.batch_decode(out2.sequences,
-                                                              skip_special_tokens=True)]
+        txt1 = tokenizer1.batch_decode(out1.sequences, skip_special_tokens=True)
+        txt2 = tokenizer2.batch_decode(out2.sequences, skip_special_tokens=True)
 
-        # sequence‑level log‑probabilities
+        # --- 2. Post-process predictions ----------------------------------------
+        if dataset_name.lower() == "anli":
+            golds = [convert_gold(g) for g in golds]
+
+        preds1 = [extract_pred(dataset_name, t) for t in txt1]
+        preds2 = [extract_pred(dataset_name, t) for t in txt2]
+
+        # log-prob of the generated continuation (for ensemble pick)
         lp1 = _calc_seq_logprobs(out1.scores, out1.sequences, int(p_len1.min())).cpu()
         lp2 = _calc_seq_logprobs(out2.scores, out2.sequences, int(p_len2.min())).cpu()
 
-        for p1, p2, l1, l2, g in zip(preds1, preds2, lp1, lp2, gold):
-            best = p1 if l1 >= l2 else p2
+        # --- 3. Scoring ----------------------------------------------------------
+        for p1, p2, g, l1, l2 in zip(preds1, preds2, golds, lp1, lp2):
 
-            # per‑student tallies
-            if is_math:
-                s1_ok += is_math_correct(p1, g)
-                s2_ok += is_math_correct(p2, g)
-                ensemble_ok += is_math_correct(best, g)
-            else:
-                s1_ok += int(p1 == g)
-                s2_ok += int(p2 == g)
-                ensemble_ok += int(best == g)
+            # individual students
+            correct_s1      += int(evaluate_pred(dataset_name, p1, g))
+            correct_s2      += int(evaluate_pred(dataset_name, p2, g))
+
+            # ensemble: keep the prediction with the higher own-model log-prob
+            p_best          = p1 if l1 >= l2 else p2
+            correct_ensemble+= int(evaluate_pred(dataset_name, p_best, g))
+
             total += 1
 
-        # if accelerator.is_main_process:
+        # --- 4. Online logging ---------------------------------------------------
         wandb.log({
-            "eval/acc_overall": ensemble_ok / total,
-            "eval/acc_s1":      s1_ok / total,
-            "eval/acc_s2":      s2_ok / total,
+            "eval/acc_s1":      correct_s1 / total,
+            "eval/acc_s2":      correct_s2 / total,
+            "eval/acc_ensemble":correct_ensemble / total,
         })
-        print(f"\nOverall acc: {ensemble_ok/total:.4f}")
-        print(f"Student‑1 acc: {s1_ok/total:.4f}")
-        print(f"Student‑2 acc: {s2_ok/total:.4f}")
 
-    # if accelerator.is_main_process:
-    print(f"\nOverall  acc: {ensemble_ok/total:.4f}")
-    print(f"Student‑1 acc: {s1_ok/total:.4f}")
-    print(f"Student‑2 acc: {s2_ok/total:.4f}")
+        print(
+            f"\rAcc  | S1: {correct_s1/total:.4f}  "
+            f"S2: {correct_s2/total:.4f}  "
+            f"Ensemble: {correct_ensemble/total:.4f}",
+            end="",
+        )
 
-    return ensemble_ok / total
+        # (optional) quick sanity-check cut-off
+        # if total >= 200: break
 
-# ─── run it ───────────────────────────────────────────────────
+    print(
+        f"\nFinal acc –  S1: {correct_s1/total:.4f}  "
+        f"S2: {correct_s2/total:.4f}  "
+        f"Ensemble: {correct_ensemble/total:.4f}"
+    )
+    return {
+        "acc_s1":       correct_s1      / total,
+        "acc_s2":       correct_s2      / total,
+        "acc_ensemble": correct_ensemble/ total,
+    }
+
+
+# ─────────────────────────────── usage ───────────────────────────────
 if accelerator.is_main_process:
-    evaluate_dual_students(TEST_PATH, task_name="GSM8K", model_tag="mistral")
+    eval_ds = PromptDataset(TEST_PATH)
+    eval_dl = DataLoader(eval_ds, batch_size=EVAL_BATCH_SIZE, shuffle=False)
+
+    gen_s1 = torch.compile(accelerator.unwrap_model(student1), mode="reduce-overhead").eval()
+    gen_s2 = torch.compile(accelerator.unwrap_model(student2), mode="reduce-overhead").eval()
+
+    res = evaluate_dual_loader(
+        gen_s1, tokenizer_1,
+        gen_s2, tokenizer_2,
+        eval_dl,
+        dataset_name=args.task,     # e.g. "gsm8k", "arc_challenge", ...
+        max_gen_tokens=EVAL_MAX_LEN,
+    )
+    wandb.log({f"eval/{k}": v for k, v in res.items()})
