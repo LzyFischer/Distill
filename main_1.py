@@ -19,6 +19,16 @@ import pdb
 
 import argparse, pathlib
 
+def str2bool(v):
+    if isinstance(v, bool):
+        return v
+    if v.lower() in ('yes', 'true', 't', 'y', '1'):
+        return True
+    elif v.lower() in ('no', 'false', 'f', 'n', '0'):
+        return False
+    else:
+        raise argparse.ArgumentTypeError('Boolean value expected.')
+
 def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument("--task",      type=str, required=True,
@@ -27,9 +37,9 @@ def parse_args():
                    help="folder name under ./data")
     p.add_argument("--model1",    type=str, default="mistralai/Mistral-7B-Instruct-v0.3")
     p.add_argument("--model2",    type=str, default="google/gemma-7b-it")
-    p.add_argument("--epochs",    type=int, default=1)
+    p.add_argument("--epochs",    type=int, default=10)
     p.add_argument("--bs",        type=int, default=4)
-    p.add_argument("--max_len",   type=int, default=512)
+    p.add_argument("--max_len",   type=int, default=768)
     p.add_argument("--eval_bs",   type=int, default=8)
     p.add_argument("--eval_max_len", type=int, default=1024)
     p.add_argument("--seed",      type=int, default=42)
@@ -37,15 +47,21 @@ def parse_args():
     p.add_argument("--lr_s2",     type=float, default=2e-4)
     p.add_argument("--lr_misc",   type=float, default=1e-4)
     p.add_argument("--outdir",    type=str, default="runs")
+    p.add_argument("--use_kl", type=str2bool, default=True)
+    p.add_argument("--is_router", type=str2bool, default=True)
+    p.add_argument("--is_quality", type=str2bool, default=True)
     return p.parse_args()
 
 args = parse_args()
 
 # build file paths from task name
 root         = pathlib.Path("data") / args.task
-DATA_PATH    = root / "train" / "train_cot_distill.jsonl"
+DATA_PATH    = root / "train" / "cot_response.correct.jsonl"
+ALL_PATH     = root / "train" / "cot_response.enriched.jsonl"
+if not args.is_quality:
+    DATA_PATH = ALL_PATH
 DEV_PATH     = root / "train" / "test_cot_distill.jsonl"
-TEST_PATH    = root / "test"  / "cot_response.jsonl"
+TEST_PATH    = root / "test"  / "cot_response.enriched.jsonl"
 MODEL_1      = args.model1
 MODEL_2      = args.model2
 NUM_EPOCHS   = args.epochs
@@ -62,7 +78,8 @@ LR_MISC = args.lr_misc        # shared modules
 alpha           = 0.5     # unused (was ensemble weight in baseline)
 temperature     = 1.0
 kl_weight       = 0.1
-USE_KL_DISTILLATION = True
+reg_weight      = 0.01
+USE_KL_DISTILLATION = args.use_kl
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # torch.backends.cuda.matmul.allow_tf32 = True      # (optional) speed
@@ -77,10 +94,13 @@ print("local rank =", accelerator.local_process_index, "device =", accelerator.d
 
 automatic_wandb_config = dict(
     model_1=MODEL_1, model_2=MODEL_2, 
+    lr_s1=LR_S1, lr_s2=LR_S2,
     encoder=ENCODER, batch_size=BATCH_SIZE,
     eval_bs=EVAL_BATCH_SIZE, num_epochs=NUM_EPOCHS,
     kl_weight=kl_weight, alpha=alpha,
     temperature=temperature, use_kl=USE_KL_DISTILLATION
+    , reg_weight=reg_weight, is_router=args.is_router,
+    is_quality=args.is_quality
 )
 if accelerator.is_main_process:
     wandb.init(project=PROJECT,
@@ -98,7 +118,7 @@ def load_data(file_path):
                 data.append(json_object)
             except json.JSONDecodeError:
                 print(f"Skipping invalid JSON line: {line.strip()}")
-    data = data
+    # data = data[:int(len(data) * 0.5)]
     return data
 
 # ──────────────────────── DATASETS ────────────────────────
@@ -109,14 +129,14 @@ class CotDataset(Dataset):
     def __len__(self): return len(self.data)
     def __getitem__(self, idx):
         d      = self.data[idx]
-        ins    = d["prompt"]
-        cot    = d["messages"][1]["content"]          # teacher CoT (+ answer)
-        cots = [cot, cot]
+        # pdb.set_trace()
+        ins    = d["prompts"] # list
+        cots    = d['responses']          # teacher CoT (+ answer) list
+    
 
-
-        prompt = self.tok(ins, return_tensors="pt", padding="max_length",
-                          truncation=True, max_length=512)
-        L      = prompt["attention_mask"].sum()       # prompt lenth
+        # prompt = self.tok(ins, return_tensors="pt", padding="max_length",
+        #                   truncation=True, max_length=512)
+        # L      = prompt["attention_mask"].sum()       # prompt lenth
 
         ids = []
         attn = []
@@ -127,14 +147,23 @@ class CotDataset(Dataset):
         attn_2 = []
         label_2 = []
         rand_indices = random.sample(range(len(cots)), len(cots))
+        if len(rand_indices) < 2:
+            rand_indices = [0, 0]
         for i in range(2):
             # Randomly select a CoT from the list
-            selected_cot = cots[rand_indices[i]]
-            full = (self.tok(ins + selected_cot, return_tensors="pt", padding="max_length",
+            try:
+                selected_cot = cots[rand_indices[i]]
+            except:
+                pdb.set_trace()
+            selected_ins = ins[rand_indices[i]]
+            selected_prompt = self.tok(selected_ins, return_tensors="pt", padding="max_length",
+                                      truncation=True, max_length=512)
+            L = selected_prompt["attention_mask"].sum()       # prompt length
+            full = (self.tok(selected_ins + selected_cot, return_tensors="pt", padding="max_length",
                             truncation=True, max_length=512))
-            full_1 = (self.tok_1(ins + selected_cot, return_tensors="pt", padding="max_length",
+            full_1 = (self.tok_1(selected_ins + selected_cot, return_tensors="pt", padding="max_length",
                                 truncation=True, max_length=MAX_LEN))
-            full_2 = (self.tok_2(ins + selected_cot, return_tensors="pt", padding="max_length",
+            full_2 = (self.tok_2(selected_ins + selected_cot, return_tensors="pt", padding="max_length",
                                 truncation=True, max_length=MAX_LEN))
             
             ids.append(full["input_ids"].squeeze(0))
@@ -354,7 +383,6 @@ for epoch in range(1, NUM_EPOCHS + 1):
 
         gate1 = router(h1)                         # [B,2] one‑hot
         gate2 = router(h2)
-        pdb.set_trace()
 
         # 主进程广播，确保多 GPU 一致
         if dist.is_initialized():
@@ -363,6 +391,9 @@ for epoch in range(1, NUM_EPOCHS + 1):
 
         m1 = (gate1[:, 0].bool() | gate2[:, 0].bool())  # 选给 student1 的样本
         m2 = (gate1[:, 1].bool() | gate2[:, 1].bool())  # 选给 student2 的样本
+        # if not args.is_router:
+        #     m1 = torch.ones_like(m1, dtype=torch.bool)
+        #     m2 = torch.ones_like(m2, dtype=torch.bool)
         h1_full = torch.zeros(B, T, D, dtype=torch.float16, device=DEVICE)
         h2_full = torch.zeros_like(h1_full)
 
@@ -417,8 +448,12 @@ for epoch in range(1, NUM_EPOCHS + 1):
 
         # ── 加权融合 + KL 蒸馏 ───────────────────────────
         tok_mask = (batch["labels_1"][0] != -100).unsqueeze(-1)
-        w = weight_net((h1_full + h2_full) / 2).unsqueeze(-1)       # [B,1,1]
-        logits_ens = (w.expand(h1_full.shape) * h1_full + (1 - w).expand(h2_full.shape) * h2_full).detach()
+        w_1 = weight_net((h1_full)).unsqueeze(-1)       # [B,1,1]
+        w_2 = weight_net((h2_full)).unsqueeze(-1)       # [B,1,1]
+        # softmax over the two students
+        we = torch.softmax(torch.cat([w_1, w_2], dim=-1), dim=-1)  # [B, 1, 2]
+
+        logits_ens = (we[..., [0]].expand(h1_full.shape) * h1_full + we[..., [1]].expand(h2_full.shape) * h2_full).detach()
         # logits_ens = (w * h1_full[tok_mask] + (1 - w) * h2_full[tok_mask]).to(torch.bfloat16).detach()
 
         if USE_KL_DISTILLATION:
@@ -436,7 +471,7 @@ for epoch in range(1, NUM_EPOCHS + 1):
             else:
                 kl1 = F.mse_loss(h1_full, logits_ens)
                 kl2 = F.mse_loss(h2_full, logits_ens)
-            loss = ce1 + ce2 + kl_weight * (kl1 + kl2)
+            loss = ce1 + ce2 + kl_weight * (kl1 + kl2) + reg_weight * (gate1.mean() + gate2.mean()) / 2
         else:
             kl1 = kl2 = torch.tensor(0., device=DEVICE)
             loss = ce1 + ce2

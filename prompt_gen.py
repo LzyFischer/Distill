@@ -76,14 +76,17 @@ dataset_prompt: Dict[str, Any] = {
 }
 
 # single powerful wrapper
-# POWER_WRAPPER = (
-#     "Read the problem carefully. Break it into small sub‑problems. Solve each "
-#     "sub‑problem step by step. Double‑check the answers.\n\n{}"
-# )
-
 POWER_WRAPPER = (
+    "Read the problem carefully. Break it into small sub‑problems. Solve each "
+    "sub‑problem step by step. Double‑check the answers.\n\n{}"
+)
+
+# POWER_WRAPPER = (
+#     "{}\n\n Let's think step by step."
+#     )
+SFT_WRAPPER = (
     "{}"
-    )
+)
 
 ###############################################################################
 # Parse predictions & gold                                                    #
@@ -133,6 +136,7 @@ def evaluate_pred(dataset: str, pred: str, gold: str) -> bool:
 def make_prompt(samp: Dict[str, Any], dataset: str) -> str:
     base = dataset_prompt[dataset](samp)
     return POWER_WRAPPER.format(base)
+    # return SFT_WRAPPER.format(base)
 
 
 def process_file(path: Path, dataset: str, model_name: str):
@@ -161,6 +165,7 @@ def process_file(path: Path, dataset: str, model_name: str):
             })
 
     # write output files next to original
+    # enriched_p = path.with_name(path.stem + ".sft.jsonl")
     enriched_p = path.with_name(path.stem + ".enriched.jsonl")
     with enriched_p.open("w") as f:
         for obj in enriched:

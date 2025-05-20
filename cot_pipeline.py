@@ -23,6 +23,7 @@ from utils import (
     get_number_choice,
     get_true_false,
     get_yes_no,
+    extract_answer_anli
 )
 from math_utils import is_math_correct, parse_math_boxed, parse_boxed
 
@@ -49,11 +50,11 @@ from math_utils import is_math_correct, parse_math_boxed, parse_boxed
 ###############################################################################
 
 STYLE_WRAP = [
-    lambda base: f"{base}\n\nLet's reason step by step, writing each reasoning step clearly before giving the final answer.",
-    lambda base: f"Use code to solve the following problem and print the final answer.\n{base}",
-    lambda base: f"First retrieve some relevant facts from your knowledge, then use them to reason to the final answer.\n{base}",
-    lambda base: f"Think in a tree of thoughts: outline multiple solution paths and choose the most promising one to derive the answer.\n{base}",
-    lambda base: f"Use forward reasoning to propose a candidate answer, then backward reasoning to verify it and provide the final verified answer.\n{base}",
+    lambda base: f"{base}\n\nLet's reason step by step, writing each reasoning step clearly before giving the final answer.", # CoT
+    lambda base: f"Use code to solve the following problem and print the final answer.\n{base}", # Code
+    lambda base: f"First retrieve some relevant facts from your knowledge, then use them to reason to the final answer.\n{base}", # Knowledge
+    lambda base: f"Think in a tree of thoughts: outline multiple solution paths and choose the most promising one to derive the answer.\n{base}", # Tree of thoughts
+    lambda base: f"Use forward reasoning to propose a candidate answer, then backward reasoning to verify it and provide the final verified answer.\n{base}", # Forward-backward
     lambda base: f"Reason to solve the problem:\n{base}",
 ]
 
@@ -143,7 +144,7 @@ def gold_norm(dataset: str, sample: Dict[str, Any]):
 def evaluate_pred(dataset: str, pred: str, gold: str) -> bool:
     if dataset in {"math", "gsm8k", "table_mwp"}:
         return is_math_correct(pred, gold)
-    return pred == gold
+    return pred.lower() == gold.lower()
 
 ###############################################################################
 # Core processing                                                             #

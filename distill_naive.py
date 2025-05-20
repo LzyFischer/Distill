@@ -244,7 +244,6 @@ def evaluate_loader(
             golds = [convert_gold(g) for g in golds]
         # 2. Post-process & score
         preds = [extract_pred(dataset_name, o) for o in outs]
-        pdb.set_trace()
         for p, g in zip(preds, golds):
             correct += int(evaluate_pred(dataset_name, p, g))
             total += 1
