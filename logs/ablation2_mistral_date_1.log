@@ -1,0 +1,9 @@
+local rank = 0 device = cuda
+Loading tokenizer & frozen backbone …
+Building two LoRA students …
+trainable params: 3,407,872 || all params: 7,251,431,424 || trainable%: 0.0470
+trainable params: 3,211,264 || all params: 8,540,892,160 || trainable%: 0.0376
+✓ student-2 frozen (no trainable params)
+[1;34mwandb[0m: 
+[1;34mwandb[0m: 🚀 View run [33mmistralai/Mistral-7B-Instruct-v0.3_google/gemma-7b-it_20250701-104912[0m at: [34mhttps://wandb.ai/vjd5zr/multi%E2%80%91student%E2%80%91date/runs/4dj140dy[0m
+[1;34mwandb[0m: Find logs at: [1;35m../../../../sfs/weka/scratch/vjd5zr/project/distill/wandb/run-20250701_104913-4dj140dy/logs[0m

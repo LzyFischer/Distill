@@ -26,12 +26,12 @@ def parse_args():
     p.add_argument("--task",    required=True,
                    choices=["gsm8k","math","arc_challenge","anli",
                             "commonsense_qa","date","strategy_qa","table_mwp"])
-    p.add_argument("--model",   default="mistralai/Mistral-7B-Instruct-v0.3")
+    p.add_argument("--model",   default="google/gemma-7b-it")
     p.add_argument("--epochs",  type=int, default=1)
     p.add_argument("--bs",      type=int, default=4)
     p.add_argument("--eval_bs",     type=int, default=8)
     p.add_argument("--max_len", type=int, default=1024)
-    p.add_argument("--lr",      type=float, default=5e-6)
+    p.add_argument("--lr",      type=float, default=2e-4)
     return p.parse_args()
 
 args = parse_args()
@@ -252,8 +252,8 @@ def evaluate_loader(
         wandb.log({"eval/acc": correct / max(total, 1)})
 
         # Fast-stop if you want a quick sanity check
-        if total >= 200:
-            break
+        # if total >= 200:
+        #     break
 
         print(f"Eval acc so far: {correct / max(total, 1):.4f}")
 

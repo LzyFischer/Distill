@@ -43,7 +43,7 @@ def parse_args():
     p.add_argument("--eval_bs",   type=int, default=8)
     p.add_argument("--eval_max_len", type=int, default=1024)
     p.add_argument("--seed",      type=int, default=42)
-    p.add_argument("--lr_s1",     type=float, default=5e-6)
+    p.add_argument("--lr_s1",     type=float, default=2e-4)
     p.add_argument("--lr_s2",     type=float, default=2e-4)
     p.add_argument("--lr_misc",   type=float, default=1e-4)
     p.add_argument("--outdir",    type=str, default="runs")
@@ -52,6 +52,11 @@ def parse_args():
     p.add_argument("--is_quality", type=str2bool, default=True)
     p.add_argument("--sample_size", type=float, default=1.0)
     p.add_argument("--is_sft", type=str2bool, default=False)
+        # -- Ablations --──────────────────────────────────────────────────────────
+    p.add_argument("--freeze_s1",  type=str2bool, default=False,
+                   help="If true, keep *all* params of student-1 frozen.")
+    p.add_argument("--freeze_s2",  type=str2bool, default=False,
+                   help="If true, keep *all* params of student-2 frozen.")
     return p.parse_args()
 
 args = parse_args()
@@ -316,6 +321,14 @@ def make_student(backbone):
 print("Building two LoRA students …")
 student1, student2 = make_student(model_1), make_student(model_2)
 # pdb.set_trace()
+
+if args.freeze_s1:
+    for p in student1.parameters(): p.requires_grad = False
+    print("✓ student-1 frozen (no trainable params)")
+if args.freeze_s2:
+    for p in student2.parameters(): p.requires_grad = False
+    print("✓ student-2 frozen (no trainable params)")
+
 
 # ──────────────────────── INSTANTIATE NEW UTILS ────────────────────────
 encoder     = CotEncoder(encoder_backbone)

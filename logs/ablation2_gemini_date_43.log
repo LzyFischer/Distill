@@ -1,0 +1,12 @@
+local rank = 0 device = cuda
+Loading tokenizer & frozen backbone …
+Building two LoRA students …
+trainable params: 3,407,872 || all params: 7,251,431,424 || trainable%: 0.0470
+trainable params: 3,211,264 || all params: 8,540,892,160 || trainable%: 0.0376
+✓ student-1 frozen (no trainable params)
+✓ Training done
+Acc  | S1: 0.5000  S2: 0.8750  Ensemble: 0.8750Acc  | S1: 0.6875  S2: 0.9375  Ensemble: 0.9375Acc  | S1: 0.5417  S2: 0.8750  Ensemble: 0.8750Acc  | S1: 0.5625  S2: 0.8750  Ensemble: 0.8438Acc  | S1: 0.5750  S2: 0.8500  Ensemble: 0.8000Acc  | S1: 0.5417  S2: 0.8542  Ensemble: 0.7708Acc  | S1: 0.5000  S2: 0.8036  Ensemble: 0.7321Acc  | S1: 0.5000  S2: 0.8281  Ensemble: 0.7656Acc  | S1: 0.5139  S2: 0.8333  Ensemble: 0.7639Acc  | S1: 0.5000  S2: 0.8250  Ensemble: 0.7500Acc  | S1: 0.5114  S2: 0.8295  Ensemble: 0.7614Acc  | S1: 0.5104  S2: 0.8438  Ensemble: 0.7604Acc  | S1: 0.5288  S2: 0.8077  Ensemble: 0.7308Acc  | S1: 0.5536  S2: 0.7946  Ensemble: 0.7232Acc  | S1: 0.5500  S2: 0.8083  Ensemble: 0.7333Acc  | S1: 0.5391  S2: 0.8047  Ensemble: 0.7188Acc  | S1: 0.5441  S2: 0.7941  Ensemble: 0.7206Acc  | S1: 0.5278  S2: 0.7986  Ensemble: 0.7292Acc  | S1: 0.5066  S2: 0.7763  Ensemble: 0.7105Acc  | S1: 0.5188  S2: 0.7875  Ensemble: 0.7188Acc  | S1: 0.5119  S2: 0.7738  Ensemble: 0.7143Acc  | S1: 0.5148  S2: 0.7751  Ensemble: 0.7160
+Final acc –  S1: 0.5148  S2: 0.7751  Ensemble: 0.7160
+[1;34mwandb[0m: 
+[1;34mwandb[0m: 🚀 View run [33mmistralai/Mistral-7B-Instruct-v0.3_google/gemma-7b-it_20250701-114957[0m at: [34mhttps://wandb.ai/vjd5zr/multi%E2%80%91student%E2%80%91date/runs/tzqivaxv[0m
+[1;34mwandb[0m: Find logs at: [1;35m../../../../sfs/weka/scratch/vjd5zr/project/distill/wandb/run-20250701_114957-tzqivaxv/logs[0m
